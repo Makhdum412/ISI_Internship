@@ -49,46 +49,27 @@ def load_and_preprocess_data(file_path):
     try:
         df = pd.read_excel(file_path)
         
-        # Data quality check
-        st.sidebar.markdown("**📊 Data Quality Check:**")
-        st.sidebar.write(f"**Total rows:** {len(df)}")
-        st.sidebar.write(f"**Columns:** {list(df.columns)}")
-        
-        # Check for missing values
-        missing_data = df.isnull().sum()
-        if missing_data.sum() > 0:
-            st.sidebar.warning(f"**Missing data:** {missing_data.sum()} values")
-            st.sidebar.write(missing_data[missing_data > 0])
-        
-        # Check data types
-        st.sidebar.write(f"**Data types:**")
-        for col, dtype in df.dtypes.items():
-            st.sidebar.write(f"  {col}: {dtype}")
-        
         # Process Year column
         if 'Year' in df.columns:
             try:
                 df['Year'] = df['Year'].apply(lambda x: pd.to_datetime(str(x).split('-')[0] + '-01-01'))
                 df.set_index('Year', inplace=True)
             except Exception as e:
-                st.sidebar.error(f"Error processing Year column: {str(e)}")
+                st.error(f"Error processing Year column: {str(e)}")
                 return None
         else:
-            st.sidebar.error("Year column not found in the data")
+            st.error("Year column not found in the data")
             return None
         
         # Check required columns
         required_columns = ['State', 'District', 'Area(Hectare)', 'Production(Tonnes)', 'Yield(Tonne/Hectare)']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
-            st.sidebar.error(f"Missing required columns: {missing_columns}")
+            st.error(f"Missing required columns: {missing_columns}")
             return None
         
         # Remove rows with all missing values in key columns
         df = df.dropna(subset=['Area(Hectare)', 'Production(Tonnes)', 'Yield(Tonne/Hectare)'], how='all')
-        
-        st.sidebar.success(f"**✅ Data loaded successfully!**")
-        st.sidebar.write(f"**Clean rows:** {len(df)}")
         
         return df
     except Exception as e:
@@ -112,6 +93,11 @@ def difference_series(series):
 def create_arima_forecast(data, metric_type, forecast_steps=5):
     """Create ARIMA forecast for the given data"""
     try:
+        # Ensure we have enough data
+        if len(data) < 3:
+            st.error("Insufficient data for ARIMA analysis. Need at least 3 data points.")
+            return None
+        
         # Check stationarity
         stationarity_result = check_stationarity(data)
         
@@ -126,10 +112,21 @@ def create_arima_forecast(data, metric_type, forecast_steps=5):
             data_diff = data
             d = 0
         
-        # Determine ARIMA parameters
-        max_lags = max(1, int(len(data_diff) * 0.3) - 1)
-        p = min(1, max_lags)
-        q = min(1, max_lags)
+        # Determine ARIMA parameters - use simpler parameters for small datasets
+        if len(data) < 10:
+            # For small datasets, use simple ARIMA(0,1,0) or ARIMA(1,1,0)
+            p, q = 0, 0
+            if len(data) >= 5:
+                p = 1
+        else:
+            # For larger datasets, use more sophisticated parameter selection
+            max_lags = max(1, min(3, int(len(data_diff) * 0.2)))
+            p = min(2, max_lags)
+            q = min(2, max_lags)
+        
+        # Ensure d doesn't exceed data length
+        if d >= len(data):
+            d = min(1, len(data) - 1)
         
         # Fit ARIMA model
         model = ARIMA(data, order=(p, d, q))
@@ -141,23 +138,28 @@ def create_arima_forecast(data, metric_type, forecast_steps=5):
         # Calculate performance metrics if enough data
         performance_metrics = {}
         if len(data) >= 5:
-            train_size = int(len(data) * 0.8)
-            train, test = data[:train_size], data[train_size:]
-            
-            model_test = ARIMA(train, order=(p, d, q))
-            results_test = model_test.fit()
-            forecast_test = results_test.forecast(steps=len(test))
-            
-            rmse = np.sqrt(mean_squared_error(test, forecast_test))
-            mape = mean_absolute_percentage_error(test, forecast_test) * 100
-            
-            performance_metrics = {
-                'rmse': rmse,
-                'mape': mape,
-                'p': p,
-                'd': d,
-                'q': q
-            }
+            try:
+                train_size = max(3, int(len(data) * 0.8))
+                if train_size < len(data):
+                    train, test = data[:train_size], data[train_size:]
+                    
+                    model_test = ARIMA(train, order=(p, d, q))
+                    results_test = model_test.fit()
+                    forecast_test = results_test.forecast(steps=len(test))
+                    
+                    rmse = np.sqrt(mean_squared_error(test, forecast_test))
+                    mape = mean_absolute_percentage_error(test, forecast_test) * 100
+                    
+                    performance_metrics = {
+                        'rmse': rmse,
+                        'mape': mape,
+                        'p': p,
+                        'd': d,
+                        'q': q
+                    }
+            except Exception as e:
+                # If performance calculation fails, still return basic results
+                performance_metrics = {'p': p, 'd': d, 'q': q}
         
         return {
             'forecast': forecast,
@@ -239,25 +241,7 @@ def main():
         st.error("Failed to load data. Please check your file format.")
         st.stop()
     
-    # Additional data validation
-    st.sidebar.markdown("**🔍 Data Validation:**")
-    
-    # Check for data inconsistencies
-    state_district_pairs = df.groupby(['State', 'District']).size().reset_index(name='count')
-    total_combinations = len(state_district_pairs)
-    st.sidebar.write(f"**State-District combinations:** {total_combinations}")
-    
-    # Check for potential data issues
-    if total_combinations > 1000:
-        st.sidebar.warning("⚠️ Large number of combinations - may indicate data quality issues")
-    
-    # Show some sample combinations
-    st.sidebar.write("**Sample combinations:**")
-    sample_pairs = state_district_pairs.head(5)
-    for _, row in sample_pairs.iterrows():
-        st.sidebar.write(f"  {row['State']} → {row['District']} ({row['count']} records)")
-    
-    # Display data info
+    # Display basic data info
     st.sidebar.success(f"✅ Data loaded successfully!")
     st.sidebar.write(f"**Total records:** {len(df)}")
     st.sidebar.write(f"**Date range:** {df.index.min().year} - {df.index.max().year}")
@@ -280,7 +264,7 @@ def main():
     # Analysis type selection
     analysis_type = st.sidebar.radio(
         "Select Analysis Type",
-        ["Production Analysis", "Yield Analysis", "Area Analysis"],
+        ["Production Analysis", "Yield Analysis"],
         help="Choose what metric to analyze and forecast"
     )
     
@@ -302,12 +286,6 @@ def main():
         st.write(f"**Total States:** {len(states)}")
         st.write(f"**Total Districts:** {len(df['District'].unique())}")
         
-        # Show sample state-district combinations
-        st.write("**Sample State-District combinations:**")
-        sample_combinations = df.groupby('State')['District'].unique().head(5)
-        for state, districts in sample_combinations.items():
-            st.write(f"**{state}:** {', '.join(districts[:3])}{'...' if len(districts) > 3 else ''}")
-        
         # Search functionality
         st.write("**Search for specific data:**")
         search_term = st.text_input("Enter state or district name:", key="search_input")
@@ -319,14 +297,6 @@ def main():
                 st.write(f"**Matching States:** {', '.join(matching_states)}")
             if matching_districts:
                 st.write(f"**Matching Districts:** {', '.join(matching_districts[:5])}")
-        
-        # Quick fix suggestions
-        st.write("**💡 Quick Fix Suggestions:**")
-        st.write("If you're getting 'No data found' errors:")
-        st.write("1. Check the Data Explorer above")
-        st.write("2. Use the search function")
-        st.write("3. Try different state-district combinations")
-        st.write("4. Verify your Excel file format")
     
     # Main content
     st.header(f"📈 {analysis_type} for {selected_district}, {selected_state}")
@@ -334,13 +304,8 @@ def main():
     # Filter data for selected state and district
     filtered_data = df[(df['State'] == selected_state) & (df['District'] == selected_district)].copy()
     
-    # Debug information
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Debug Info:**")
-    st.sidebar.write(f"**Selected State:** {selected_state}")
-    st.sidebar.write(f"**Selected District:** {selected_district}")
+    # Basic info
     st.sidebar.write(f"**Available Districts in {selected_state}:** {len(state_districts)}")
-    st.sidebar.write(f"**Filtered Records:** {len(filtered_data)}")
     
     if filtered_data.empty:
         st.error(f"No data found for {selected_district}, {selected_state}")
@@ -396,37 +361,27 @@ def main():
         if analysis_type == "Production Analysis":
             metric_value = filtered_data['Production(Tonnes)'].mean()
             st.metric("Avg Production", f"{metric_value:,.0f} tonnes")
-        elif analysis_type == "Yield Analysis":
+        else:  # Yield Analysis
             metric_value = filtered_data['Yield(Tonne/Hectare)'].mean()
             st.metric("Avg Yield", f"{metric_value:.2f} t/ha")
-        else:
-            metric_value = filtered_data['Area(Hectare)'].mean()
-            st.metric("Avg Area", f"{metric_value:,.0f} ha")
     
     with col4:
         if analysis_type == "Production Analysis":
             metric_value = filtered_data['Production(Tonnes)'].std()
             st.metric("Std Dev", f"{metric_value:,.0f} tonnes")
-        elif analysis_type == "Yield Analysis":
+        else:  # Yield Analysis
             metric_value = filtered_data['Yield(Tonne/Hectare)'].std()
             st.metric("Std Dev", f"{metric_value:.2f} t/ha")
-        else:
-            metric_value = filtered_data['Area(Hectare)'].std()
-            st.metric("Std Dev", f"{metric_value:,.0f} ha")
     
     # Select the appropriate column based on analysis type
     if analysis_type == "Production Analysis":
         data_column = filtered_data['Production(Tonnes)']
         ylabel = "Production (Tonnes)"
         metric_name = "Production"
-    elif analysis_type == "Yield Analysis":
+    else:  # Yield Analysis
         data_column = filtered_data['Yield(Tonne/Hectare)']
         ylabel = "Yield (Tonne/Hectare)"
         metric_name = "Yield"
-    else:
-        data_column = filtered_data['Area(Hectare)']
-        ylabel = "Area (Hectares)"
-        metric_name = "Area"
     
     # Data preview
     st.subheader("📋 Data Preview")
@@ -446,16 +401,54 @@ def main():
     # ARIMA Analysis
     st.subheader("🔮 ARIMA Forecast Analysis")
     
+    # Check data quality for ARIMA
     if len(data_column) < 3:
         st.warning("Insufficient data for ARIMA analysis. Need at least 3 data points.")
+        st.stop()
+    
+    # Check if data has enough variation
+    if data_column.std() == 0:
+        st.warning("Data has no variation (all values are the same). ARIMA analysis may not be meaningful.")
+        st.stop()
+    
+    # Check for too many zero values
+    zero_count = (data_column == 0).sum()
+    if zero_count > len(data_column) * 0.8:
+        st.warning("Too many zero values in data. ARIMA analysis may not be reliable.")
         st.stop()
     
     with st.spinner("Performing ARIMA analysis..."):
         arima_results = create_arima_forecast(data_column, metric_name, forecast_steps)
     
     if arima_results is None:
-        st.error("Failed to perform ARIMA analysis. Please check your data.")
-        st.stop()
+        st.warning("ARIMA analysis failed. Trying simple trend-based forecast...")
+        
+        # Simple fallback forecast using linear trend
+        try:
+            x = np.arange(len(data_column))
+            y = data_column.values
+            
+            # Fit simple linear trend
+            coeffs = np.polyfit(x, y, 1)
+            trend_line = np.polyval(coeffs, x)
+            
+            # Generate simple forecast
+            future_x = np.arange(len(data_column), len(data_column) + forecast_steps)
+            simple_forecast = np.polyval(coeffs, future_x)
+            
+            # Create simple forecast results
+            arima_results = {
+                'forecast': simple_forecast,
+                'stationarity_result': {'is_stationary': False, 'adf_statistic': 0, 'p_value': 1.0},
+                'performance_metrics': {'p': 0, 'd': 0, 'q': 0},
+                'd': 0
+            }
+            
+            st.info("Using simple trend-based forecast as fallback.")
+            
+        except Exception as e:
+            st.error("Both ARIMA and fallback forecast failed. Please check your data quality.")
+            st.stop()
     
     # Display stationarity results
     col1, col2 = st.columns(2)
@@ -509,10 +502,8 @@ def main():
     
     if analysis_type == "Production Analysis":
         forecast_df[f'Forecasted {metric_name}'] = forecast_df[f'Forecasted {metric_name}'].round(2)
-    elif analysis_type == "Yield Analysis":
+    else:  # Yield Analysis
         forecast_df[f'Forecasted {metric_name}'] = forecast_df[f'Forecasted {metric_name}'].round(3)
-    else:
-        forecast_df[f'Forecasted {metric_name}'] = forecast_df[f'Forecasted {metric_name}'].round(2)
     
     st.dataframe(forecast_df, use_container_width=True)
     
