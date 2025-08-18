@@ -440,7 +440,7 @@ def main():
             arima_results = {
                 'forecast': simple_forecast,
                 'stationarity_result': {'is_stationary': False, 'adf_statistic': 0, 'p_value': 1.0},
-                'performance_metrics': {'p': 0, 'd': 0, 'q': 0},
+                'performance_metrics': {'p': 0, 'd': 0, 'q': 0, 'rmse': None, 'mape': None},
                 'd': 0
             }
             
@@ -456,9 +456,12 @@ def main():
     with col1:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         st.markdown("**Stationarity Test Results**")
-        st.write(f"ADF Statistic: {arima_results['stationarity_result']['adf_statistic']:.4f}")
-        st.write(f"P-value: {arima_results['stationarity_result']['p_value']:.4f}")
-        st.write(f"Stationary: {'✅ Yes' if arima_results['stationarity_result']['is_stationary'] else '❌ No'}")
+        if 'adf_statistic' in arima_results['stationarity_result']:
+            st.write(f"ADF Statistic: {arima_results['stationarity_result']['adf_statistic']:.4f}")
+        if 'p_value' in arima_results['stationarity_result']:
+            st.write(f"P-value: {arima_results['stationarity_result']['p_value']:.4f}")
+        if 'is_stationary' in arima_results['stationarity_result']:
+            st.write(f"Stationary: {'✅ Yes' if arima_results['stationarity_result']['is_stationary'] else '❌ No'}")
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
@@ -470,35 +473,47 @@ def main():
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Performance metrics
-    if arima_results['performance_metrics']:
+    if arima_results['performance_metrics'] and len(arima_results['performance_metrics']) > 2:
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
             st.markdown("**Model Performance**")
-            st.write(f"RMSE: {arima_results['performance_metrics']['rmse']:.2f}")
-            st.write(f"MAPE: {arima_results['performance_metrics']['mape']:.2f}%")
+            if 'rmse' in arima_results['performance_metrics']:
+                st.write(f"RMSE: {arima_results['performance_metrics']['rmse']:.2f}")
+            if 'mape' in arima_results['performance_metrics']:
+                st.write(f"MAPE: {arima_results['performance_metrics']['mape']:.2f}%")
             st.markdown('</div>', unsafe_allow_html=True)
     
     # Forecast plot
     st.subheader("🎯 Forecast Results")
-    forecast_fig = create_forecast_plot(
-        data_column,
-        arima_results['forecast'],
-        f"{metric_name} Forecast for {selected_district}, {selected_state}",
-        ylabel
-    )
-    st.plotly_chart(forecast_fig, use_container_width=True)
+    try:
+        forecast_fig = create_forecast_plot(
+            data_column,
+            arima_results['forecast'],
+            f"{metric_name} Forecast for {selected_district}, {selected_state}",
+            ylabel
+        )
+        st.plotly_chart(forecast_fig, use_container_width=True)
+    except Exception as e:
+        st.error(f"Error creating forecast plot: {str(e)}")
+        st.warning("Please check your data quality and try again.")
+        st.stop()
     
     # Forecast table
     st.subheader("📅 Detailed Forecast")
-    last_date = data_column.index[-1]
-    future_dates = pd.date_range(start=last_date, periods=len(arima_results['forecast']) + 1, freq='Y')[1:]
-    
-    forecast_df = pd.DataFrame({
-        'Year': [date.year for date in future_dates],
-        f'Forecasted {metric_name}': arima_results['forecast']
-    })
+    try:
+        last_date = data_column.index[-1]
+        future_dates = pd.date_range(start=last_date, periods=len(arima_results['forecast']) + 1, freq='Y')[1:]
+        
+        forecast_df = pd.DataFrame({
+            'Year': [date.year for date in future_dates],
+            f'Forecasted {metric_name}': arima_results['forecast']
+        })
+    except Exception as e:
+        st.error(f"Error creating forecast table: {str(e)}")
+        st.warning("Please check your data quality and try again.")
+        st.stop()
     
     if analysis_type == "Production Analysis":
         forecast_df[f'Forecasted {metric_name}'] = forecast_df[f'Forecasted {metric_name}'].round(2)
