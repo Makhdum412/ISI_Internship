@@ -48,9 +48,48 @@ def load_and_preprocess_data(file_path):
     """Load and preprocess the rice data"""
     try:
         df = pd.read_excel(file_path)
-        df['Year'] = df['Year'].apply(lambda x: pd.to_datetime(x.split('-')[0] + '-01-01'))
-        df.set_index('Year', inplace=True)
+        
+        # Data quality check
+        st.sidebar.markdown("**📊 Data Quality Check:**")
+        st.sidebar.write(f"**Total rows:** {len(df)}")
+        st.sidebar.write(f"**Columns:** {list(df.columns)}")
+        
+        # Check for missing values
+        missing_data = df.isnull().sum()
+        if missing_data.sum() > 0:
+            st.sidebar.warning(f"**Missing data:** {missing_data.sum()} values")
+            st.sidebar.write(missing_data[missing_data > 0])
+        
+        # Check data types
+        st.sidebar.write(f"**Data types:**")
+        for col, dtype in df.dtypes.items():
+            st.sidebar.write(f"  {col}: {dtype}")
+        
+        # Process Year column
+        if 'Year' in df.columns:
+            try:
+                df['Year'] = df['Year'].apply(lambda x: pd.to_datetime(str(x).split('-')[0] + '-01-01'))
+                df.set_index('Year', inplace=True)
+            except Exception as e:
+                st.sidebar.error(f"Error processing Year column: {str(e)}")
+                return None
+        else:
+            st.sidebar.error("Year column not found in the data")
+            return None
+        
+        # Check required columns
+        required_columns = ['State', 'District', 'Area(Hectare)', 'Production(Tonnes)', 'Yield(Tonne/Hectare)']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            st.sidebar.error(f"Missing required columns: {missing_columns}")
+            return None
+        
+        # Remove rows with all missing values in key columns
         df = df.dropna(subset=['Area(Hectare)', 'Production(Tonnes)', 'Yield(Tonne/Hectare)'], how='all')
+        
+        st.sidebar.success(f"**✅ Data loaded successfully!**")
+        st.sidebar.write(f"**Clean rows:** {len(df)}")
+        
         return df
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
@@ -200,18 +239,43 @@ def main():
         st.error("Failed to load data. Please check your file format.")
         st.stop()
     
+    # Additional data validation
+    st.sidebar.markdown("**🔍 Data Validation:**")
+    
+    # Check for data inconsistencies
+    state_district_pairs = df.groupby(['State', 'District']).size().reset_index(name='count')
+    total_combinations = len(state_district_pairs)
+    st.sidebar.write(f"**State-District combinations:** {total_combinations}")
+    
+    # Check for potential data issues
+    if total_combinations > 1000:
+        st.sidebar.warning("⚠️ Large number of combinations - may indicate data quality issues")
+    
+    # Show some sample combinations
+    st.sidebar.write("**Sample combinations:**")
+    sample_pairs = state_district_pairs.head(5)
+    for _, row in sample_pairs.iterrows():
+        st.sidebar.write(f"  {row['State']} → {row['District']} ({row['count']} records)")
+    
     # Display data info
     st.sidebar.success(f"✅ Data loaded successfully!")
     st.sidebar.write(f"**Total records:** {len(df)}")
     st.sidebar.write(f"**Date range:** {df.index.min().year} - {df.index.max().year}")
     
-    # Get unique states and districts
+    # Get unique states
     states = sorted(df['State'].unique())
-    districts = sorted(df['District'].unique())
     
     # Sidebar selections
     selected_state = st.sidebar.selectbox("Select State", states)
-    selected_district = st.sidebar.selectbox("Select District", districts)
+    
+    # Get districts for the selected state only
+    state_districts = sorted(df[df['State'] == selected_state]['District'].unique())
+    
+    if not state_districts:
+        st.error(f"No districts found for {selected_state}")
+        st.stop()
+    
+    selected_district = st.sidebar.selectbox("Select District", state_districts)
     
     # Analysis type selection
     analysis_type = st.sidebar.radio(
@@ -232,14 +296,91 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.markdown("**About:** This app uses ARIMA time series analysis to forecast rice production, yield, and area data.")
     
+    # Add data explorer
+    with st.sidebar.expander("🔍 Data Explorer"):
+        st.write("**Quick Data Overview:**")
+        st.write(f"**Total States:** {len(states)}")
+        st.write(f"**Total Districts:** {len(df['District'].unique())}")
+        
+        # Show sample state-district combinations
+        st.write("**Sample State-District combinations:**")
+        sample_combinations = df.groupby('State')['District'].unique().head(5)
+        for state, districts in sample_combinations.items():
+            st.write(f"**{state}:** {', '.join(districts[:3])}{'...' if len(districts) > 3 else ''}")
+        
+        # Search functionality
+        st.write("**Search for specific data:**")
+        search_term = st.text_input("Enter state or district name:", key="search_input")
+        if search_term:
+            matching_states = [s for s in states if search_term.lower() in s.lower()]
+            matching_districts = [d for d in df['District'].unique() if search_term.lower() in d.lower()]
+            
+            if matching_states:
+                st.write(f"**Matching States:** {', '.join(matching_states)}")
+            if matching_districts:
+                st.write(f"**Matching Districts:** {', '.join(matching_districts[:5])}")
+        
+        # Quick fix suggestions
+        st.write("**💡 Quick Fix Suggestions:**")
+        st.write("If you're getting 'No data found' errors:")
+        st.write("1. Check the Data Explorer above")
+        st.write("2. Use the search function")
+        st.write("3. Try different state-district combinations")
+        st.write("4. Verify your Excel file format")
+    
     # Main content
     st.header(f"📈 {analysis_type} for {selected_district}, {selected_state}")
     
     # Filter data for selected state and district
     filtered_data = df[(df['State'] == selected_state) & (df['District'] == selected_district)].copy()
     
+    # Debug information
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Debug Info:**")
+    st.sidebar.write(f"**Selected State:** {selected_state}")
+    st.sidebar.write(f"**Selected District:** {selected_district}")
+    st.sidebar.write(f"**Available Districts in {selected_state}:** {len(state_districts)}")
+    st.sidebar.write(f"**Filtered Records:** {len(filtered_data)}")
+    
     if filtered_data.empty:
         st.error(f"No data found for {selected_district}, {selected_state}")
+        st.warning("This could be due to:")
+        st.warning("1. Data mismatch between State and District columns")
+        st.warning("2. Missing or incorrect data in the Excel file")
+        st.warning("3. Case sensitivity issues in state/district names")
+        
+        # Show sample data for debugging
+        st.subheader("🔍 Data Debugging")
+        st.write("**Sample data from the file:**")
+        sample_data = df.head(10)[['State', 'District', 'Year']]
+        st.dataframe(sample_data)
+        
+        st.write("**Unique States in data:**")
+        st.write(sorted(df['State'].unique()))
+        
+        st.write("**Unique Districts in data:**")
+        st.write(sorted(df['District'].unique()))
+        
+        # Show specific data for the selected state
+        st.write(f"**Data specifically for {selected_state}:**")
+        state_data = df[df['State'] == selected_state]
+        if not state_data.empty:
+            st.write(f"**Districts in {selected_state}:** {sorted(state_data['District'].unique())}")
+            st.write(f"**Sample records:**")
+            st.dataframe(state_data[['State', 'District', 'Year']].head(10))
+        else:
+            st.error(f"No data found for state: {selected_state}")
+        
+        # Show data for the selected district across all states
+        st.write(f"**Data for district '{selected_district}' across all states:**")
+        district_data = df[df['District'] == selected_district]
+        if not district_data.empty:
+            st.write(f"**States with district '{selected_district}':** {sorted(district_data['State'].unique())}")
+            st.write(f"**Sample records:**")
+            st.dataframe(district_data[['State', 'District', 'Year']].head(10))
+        else:
+            st.error(f"No data found for district: {selected_district}")
+        
         st.stop()
     
     # Display basic statistics
