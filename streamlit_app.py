@@ -8,6 +8,7 @@ from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
 import warnings
+import io
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -240,6 +241,35 @@ def main():
     if df is None:
         st.error("Failed to load data. Please check your file format.")
         st.stop()
+
+    # Filter out districts with fewer than 8 data points
+    MIN_POINTS = 8
+    group_columns = ['State', 'District']
+    try:
+        group_sizes = df.groupby(group_columns, dropna=False).size().reset_index(name='count')
+        valid_groups = group_sizes[group_sizes['count'] >= MIN_POINTS][group_columns]
+        groups_removed = len(group_sizes) - len(valid_groups)
+        rows_before = len(df)
+        df = df.merge(valid_groups, on=group_columns, how='inner')
+        rows_after = len(df)
+
+        st.sidebar.info(
+            f"Applied filter: kept districts with >= {MIN_POINTS} rows. "
+            f"Groups removed: {groups_removed}. Rows: {rows_before} -> {rows_after}."
+        )
+
+        # Provide cleaned Excel for download
+        excel_buffer = io.BytesIO()
+        df.to_excel(excel_buffer, index=False)
+        excel_buffer.seek(0)
+        st.sidebar.download_button(
+            label="📥 Download Cleaned Excel (>=8 per district)",
+            data=excel_buffer,
+            file_name="Rice_min8.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        st.sidebar.warning(f"District filtering skipped due to error: {str(e)}")
     
     # Display basic data info
     st.sidebar.success(f"✅ Data loaded successfully!")
